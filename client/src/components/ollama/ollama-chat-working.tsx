@@ -89,10 +89,7 @@ export function OllamaChat() {
     model: '',
     temperature: 0.7,
     maxTokens: 2048,
-    openaiModel: 'gpt-4o',
-    azureEndpoint: '',
-    azureApiKey: '',
-    azureModel: 'gpt-4o'
+    openaiModel: 'gpt-4o'
   });
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [ocrPrompt, setOcrPrompt] = useState<string>("");
@@ -681,15 +678,6 @@ export function OllamaChat() {
       return;
     }
 
-    if (llmConfig.provider === 'azure-openai' && (!llmConfig.azureEndpoint || !llmConfig.azureApiKey || !llmConfig.azureModel)) {
-      toast({
-        title: "Azure Configuration Required",
-        description: "Please configure Azure OpenAI endpoint, API key, and model",
-        variant: "destructive"
-      });
-      return;
-    }
-
     // Cleanup any existing stream
     if (cleanupStream) {
       cleanupStream();
@@ -735,9 +723,6 @@ export function OllamaChat() {
         break;
       case 'openai':
         streamUrl = `/api/openai/generate-stream?model=${encodeURIComponent(llmConfig.openaiModel || 'gpt-4o')}&prompt=${encodeURIComponent(prompt_text)}&system=${encodeURIComponent(systemPrompt || '')}&temperature=${llmConfig.temperature}&max_tokens=${llmConfig.maxTokens}`;
-        break;
-      case 'azure-openai':
-        streamUrl = `/api/azure-openai/generate-stream?model=${encodeURIComponent(llmConfig.azureModel || 'gpt-4o')}&prompt=${encodeURIComponent(prompt_text)}&system=${encodeURIComponent(systemPrompt || '')}&temperature=${llmConfig.temperature}&max_tokens=${llmConfig.maxTokens}&endpoint=${encodeURIComponent(llmConfig.azureEndpoint || '')}&apiKey=${encodeURIComponent(llmConfig.azureApiKey || '')}`;
         break;
       default:
         throw new Error('Invalid LLM provider selected');

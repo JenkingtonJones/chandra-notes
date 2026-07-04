@@ -2,7 +2,7 @@
 
 ## Overview
 
-A full-stack TypeScript app (React + Express) that provides a chat interface for multiple AI providers (Ollama, OpenAI, Azure OpenAI), a reusable prompt library, document OCR (PDF/XPS/OXPS), and a long-note pipeline that turns long raw clinical text into a formatted clinical note.
+A full-stack TypeScript app (React + Express) that provides a chat interface for multiple AI providers (Ollama, OpenAI), a reusable prompt library, document OCR (PDF/XPS/OXPS), and a long-note pipeline that turns long raw clinical text into a formatted clinical note.
 
 ## System Architecture
 
@@ -20,7 +20,7 @@ A full-stack TypeScript app (React + Express) that provides a chat interface for
 - **settings**: key-value app config (e.g. the Ollama server URL, so it survives restarts).
 
 ### AI Providers
-- **Ollama** (local/self-hosted LLMs, default `http://localhost:11434`; the real server is set via the `OLLAMA_API_URL` env var / settings table), **OpenAI** (GPT models), **Azure OpenAI** (enterprise endpoints). All support real-time response streaming.
+- **Ollama** (local/self-hosted LLMs, default `http://localhost:11434`; the real server is set via the `OLLAMA_API_URL` env var / settings table), **OpenAI** (GPT models). Both support real-time response streaming.
 
 ### Document OCR
 - Homepage accepts PDF/XPS/OXPS uploads (Ollama provider). Pages are rendered to PNG **in the browser** with MuPDF's WebAssembly build (`client/public/mupdf/`) to avoid large whole-file uploads (which hit the deploy proxy's request-size limit / HTTP 413).
@@ -53,7 +53,7 @@ The Ollama server sits behind a Cloudflare-style proxy that returns **HTTP 524 w
 
 - **Data**: `@neondatabase/serverless` (Postgres), `drizzle-orm`.
 - **Frontend**: `@tanstack/react-query`, `wouter`, `axios`, `@radix-ui/*`, `tailwindcss`, `class-variance-authority`, `lucide-react`.
-- **AI**: `openai` SDK; Ollama and Azure OpenAI via HTTP.
+- **AI**: `openai` SDK; Ollama via HTTP.
 - **OCR**: `mupdf` (WebAssembly).
 
 ## Deployment
@@ -62,7 +62,7 @@ The Ollama server sits behind a Cloudflare-style proxy that returns **HTTP 524 w
 - **Build**: `npm run build` (Vite client build + esbuild server bundle).
 - **Start**: `npm run start` (production server).
 - **DB**: `npm run db:push` applies schema changes (never hand-write SQL migrations; use `--force` if a data-loss warning appears).
-- **Key env vars**: `DATABASE_URL` (required), `OPENAI_API_KEY`, `OLLAMA_API_URL` (Ollama server; defaults to `http://localhost:11434`, also persisted in the DB), `AZURE_LLM_API_URL` (Azure chat endpoint), plus the optional pipeline tuning vars above.
+- **Key env vars**: `DATABASE_URL` (required), `OPENAI_API_KEY`, `OLLAMA_API_URL` (Ollama server; defaults to `http://localhost:11434`, also persisted in the DB), plus the optional pipeline tuning vars above.
 - Fixes deployed here only take effect after re-publishing.
 
 ## Changelog
@@ -74,6 +74,7 @@ The Ollama server sits behind a Cloudflare-style proxy that returns **HTTP 524 w
 - Jun 23, 2026: OCR per-page streaming with heartbeats to fix HTTP 524 on slow pages; added a repetition-loop guard.
 - Jul 3, 2026: Long-note pipeline redesigned around per-step requests (edge proxy kills any single request at ~300s); condensed steps; audit made non-fatal; client-side overall time cap.
 - Jul 4, 2026: Found and fixed the real cause of synthesize 524s — disabled model "thinking" (`think: false`), so synthesize first-tokens in ~1s and completes in ~6s.
+- Jul 4, 2026: Removed the deprecated Azure providers (Azure OpenAI + legacy Azure VM chat) and the `AZURE_LLM_API_URL` env var — the feature was unused.
 ```
 
 ## User Preferences

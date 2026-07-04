@@ -1,15 +1,10 @@
-import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { MoonIcon, SunIcon } from "lucide-react";
 import { useTheme } from "@/components/theme-provider";
-import { useServiceSelector } from "@/hooks/use-service-selector";
-import { ServiceSelector } from "@/components/service-selector";
 import { OllamaChat } from "@/components/ollama/ollama-chat-working";
-import { AzureChat } from "@/components/azure/azure-chat";
 
 export default function Home() {
   const { theme, setTheme } = useTheme();
-  const { selectedService } = useServiceSelector();
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
@@ -43,10 +38,8 @@ export default function Home() {
         </header>
 
         <main>
-          {selectedService === 'ollama' ? <OllamaChat /> : <AzureChat />}
+          <OllamaChat />
         </main>
-
-
       </div>
     </div>
   );

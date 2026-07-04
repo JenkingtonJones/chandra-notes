@@ -9,7 +9,7 @@ A full-stack TypeScript application that provides a streaming chat interface for
 ## Features
 
 ### Multi-provider AI chat
-- Chat with **Ollama** (self-hosted / local LLMs), **OpenAI** (GPT models), and **Azure OpenAI** (enterprise endpoints).
+- Chat with **Ollama** (self-hosted / local LLMs) and **OpenAI** (GPT models).
 - Real-time **token streaming** for responses.
 - Configurable model, temperature, and system prompt.
 - The Ollama server URL is editable in the UI, persisted to the database, and survives restarts, with a one-click reconnect button.
@@ -42,7 +42,7 @@ A full-stack TypeScript application that provides a streaming chat interface for
 | UI | Tailwind CSS, shadcn/ui (Radix primitives), lucide-react icons |
 | Backend | Express.js, TypeScript |
 | Database | PostgreSQL with Drizzle ORM |
-| AI | Ollama (HTTP), OpenAI SDK, Azure OpenAI (HTTP) |
+| AI | Ollama (HTTP), OpenAI SDK |
 | OCR | MuPDF (WebAssembly) |
 
 ---
@@ -52,7 +52,7 @@ A full-stack TypeScript application that provides a streaming chat interface for
 ### Prerequisites
 - Node.js 20+
 - A PostgreSQL database (a connection string)
-- Access to at least one AI provider (an Ollama server, and/or OpenAI / Azure OpenAI credentials)
+- Access to at least one AI provider (an Ollama server and/or OpenAI credentials)
 
 ### Install
 ```bash
@@ -89,13 +89,10 @@ npm run start
 | `DATABASE_URL` | Yes | PostgreSQL connection string. |
 | `OPENAI_API_KEY` | For OpenAI | OpenAI API key. |
 | `OLLAMA_API_URL` | No | Ollama server endpoint. Defaults to `http://localhost:11434` and is also persisted in the database. |
-| `AZURE_LLM_API_URL` | For Azure VM | Endpoint of an Azure-hosted chat model, if used. Defaults to `http://localhost:5000/chat`. |
 | `OLLAMA_SMALL_MODEL` | No | Pin the extraction model (blank = auto-select). |
 | `OLLAMA_LARGE_MODEL` | No | Pin the synthesize/audit model (blank = auto-select). |
 | `LONG_NOTE_CHARACTER_THRESHOLD` | No | Input length (chars) that auto-triggers the long-note pipeline. Default `12000`. |
 | `PIPELINE_MAX_RUN_MINUTES` | No | Overall wall-clock cap for a pipeline run. Default `45`. |
-
-Azure OpenAI, when used, is configured through its own endpoint/credentials in the app.
 
 ---
 
