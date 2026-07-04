@@ -97,9 +97,12 @@ export function useOllama() {
   // Function to reconnect to the server
   const reconnectToServer = async () => {
     try {
-      // Sync the current localStorage URL to the backend
-      const currentUrl = localStorage.getItem("ollamaServerUrl") || "http://localhost:11434";
-      await apiRequest("POST", "/api/ollama/config", { serverUrl: currentUrl });
+      // Only push a URL the user has explicitly set; never overwrite the server's
+      // configured URL (from the DB / OLLAMA_API_URL) with a local default.
+      const stored = localStorage.getItem("ollamaServerUrl");
+      if (stored) {
+        await apiRequest("POST", "/api/ollama/config", { serverUrl: stored });
+      }
       
       // Refresh connection status and models list
       refetchPing();
