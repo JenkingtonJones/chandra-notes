@@ -19,6 +19,7 @@ import {
   type PipelineSection,
   type SectionFacts,
 } from "./pipeline";
+import { safeErrorMeta } from "./logging";
 import { randomUUID } from "crypto";
 
 // Multer in-memory upload for document OCR (supports large files)
@@ -62,7 +63,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Purge abandoned long-note pipeline run folders (older than 2 hours)
   cleanupStaleRuns().catch(() => {});
-  
+
+  // In production we lock down operator/debug surfaces: clients cannot change
+  // the backend Ollama URL (SSRF risk) and the external-prompt-server test/docs
+  // probes are hidden. In development these stay open for convenience.
+  const isProduction = process.env.NODE_ENV === "production";
+
   // Check the Ollama API connection
   app.get("/api/ollama/ping", async (req, res) => {
     try {
@@ -118,35 +124,76 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ serverUrl: OLLAMA_API_URL });
   });
 
-  // Configure Ollama API URL
+  // Configure Ollama API URL.
+  //
+  // SECURITY: this lets a caller set a URL the server then makes outbound
+  // requests to (SSRF risk). In production we refuse client changes — the URL
+  // comes from the OLLAMA_API_URL env var / DB settings, set at deploy time. In
+  // development it stays editable for convenience. An optional
+  // OLLAMA_ALLOWED_HOSTS allowlist (comma-separated hostnames) is enforced when
+  // set, and we always require a well-formed http(s) URL.
   app.post("/api/ollama/config", async (req, res) => {
     try {
-      const { serverUrl } = req.body;
-
-      if (!serverUrl) {
-        return res.status(400).json({ 
-          status: "error", 
-          message: "Server URL is required" 
+      if (isProduction) {
+        return res.status(403).json({
+          status: "error",
+          message:
+            "The Ollama server URL is locked in production. Set it via the OLLAMA_API_URL environment variable (or the database settings) and redeploy.",
         });
       }
 
-      // Update the global URL
-      OLLAMA_API_URL = serverUrl;
-      
-      // Save to storage for persistence
-      await storage.setSetting("ollama_server_url", serverUrl);
-      
-      console.log(`Ollama API URL updated and saved to storage: ${OLLAMA_API_URL}`);
+      const { serverUrl } = req.body;
 
-      res.json({ 
-        status: "success", 
-        message: "Ollama server URL configured successfully" 
+      if (!serverUrl || typeof serverUrl !== "string") {
+        return res.status(400).json({
+          status: "error",
+          message: "Server URL is required",
+        });
+      }
+
+      let parsed: URL;
+      try {
+        parsed = new URL(serverUrl);
+      } catch {
+        return res.status(400).json({
+          status: "error",
+          message: "Server URL must be a valid URL (e.g. http://host:11434).",
+        });
+      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return res.status(400).json({
+          status: "error",
+          message: "Server URL must use http or https.",
+        });
+      }
+
+      const allowlist = (process.env.OLLAMA_ALLOWED_HOSTS || "")
+        .split(",")
+        .map((h) => h.trim().toLowerCase())
+        .filter(Boolean);
+      if (allowlist.length > 0 && !allowlist.includes(parsed.hostname.toLowerCase())) {
+        return res.status(403).json({
+          status: "error",
+          message: "That host is not in the allowed Ollama hosts list.",
+        });
+      }
+
+      // Update the global URL and persist it.
+      OLLAMA_API_URL = serverUrl;
+      await storage.setSetting("ollama_server_url", serverUrl);
+
+      // Metadata-only log: record only the host.
+      console.log(`[ollama] server URL updated host=${parsed.hostname}`);
+
+      res.json({
+        status: "success",
+        message: "Ollama server URL configured successfully",
       });
     } catch (error) {
-      console.error("Failed to configure Ollama server URL:", error);
-      res.status(500).json({ 
-        status: "error", 
-        message: "Failed to configure Ollama server URL" 
+      console.error("Failed to configure Ollama server URL:", safeErrorMeta(error));
+      res.status(500).json({
+        status: "error",
+        message: "Failed to configure Ollama server URL",
       });
     }
   });
@@ -198,7 +245,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             const data = JSON.parse(line);
             res.write(`data: ${JSON.stringify(data)}\n\n`);
           } catch (e) {
-            console.warn('Failed to parse streaming chunk:', line);
+            console.warn('[ollama] failed to parse streaming chunk');
           }
         }
       });
@@ -209,13 +256,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       response.data.on('error', (error: any) => {
-        console.error('Ollama streaming error:', error);
+        console.error('Ollama streaming error:', safeErrorMeta(error));
         res.write(`data: ${JSON.stringify({ error: 'Stream error' })}\n\n`);
         res.end();
       });
 
     } catch (error) {
-      console.error("Ollama generate error:", error);
+      console.error("Ollama generate error:", safeErrorMeta(error));
       res.status(500).json({ 
         status: "error", 
         message: "Failed to generate completion" 
@@ -267,7 +314,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             const data = JSON.parse(line);
             res.write(`data: ${JSON.stringify(data)}\n\n`);
           } catch (e) {
-            console.warn('Failed to parse streaming chunk:', line);
+            console.warn('[ollama] failed to parse streaming chunk');
           }
         }
       });
@@ -278,7 +325,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       response.data.on('error', (error: any) => {
-        console.error('Ollama streaming error:', error);
+        console.error('Ollama streaming error:', safeErrorMeta(error));
         res.write(`data: ${JSON.stringify({ error: 'Stream error' })}\n\n`);
         res.end();
       });
@@ -308,15 +355,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { model, prompt, system, temperature, top_p } = req.query;
-      
-      console.log("=== OLLAMA STREAMING DEBUG ===");
-      console.log("Model:", model);
-      console.log("Prompt length:", (prompt as string)?.length || 0);
-      console.log("System prompt length:", (system as string)?.length || 0);
-      console.log("Temperature:", temperature);
-      console.log("Top_p:", top_p);
-      console.log("Ollama URL:", OLLAMA_API_URL);
-      
+
+      // Metadata-only logging: never log the prompt, system prompt, or any
+      // generated text — these can contain clinical/PHI content.
+      console.log(
+        `[ollama] generate-stream model=${model} prompt_len=${(prompt as string)?.length || 0} system_len=${(system as string)?.length || 0}`
+      );
+
       const requestData = {
         model,
         prompt,
@@ -328,9 +373,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       };
       
-      console.log("Request data:", JSON.stringify(requestData, null, 2));
-      console.log("Starting EventSource streaming request to Ollama");
-      
       const response = await axios.post(`${OLLAMA_API_URL}/api/generate`, requestData, {
         responseType: 'stream',
         timeout: 900000, // 15 minutes for large models
@@ -338,56 +380,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
         validateStatus: (status) => status < 500 // Don't throw on 4xx errors
       });
 
-      console.log("Ollama response status:", response.status);
-      console.log("Ollama response headers:", response.headers);
-
       // Minimal headers to prevent HTTP 431 errors
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Access-Control-Allow-Origin', '*');
 
-      console.log("Set response headers, starting stream processing...");
-
-      let chunkCount = 0;
       response.data.on('data', (chunk: Buffer) => {
-        chunkCount++;
         const chunkStr = chunk.toString();
-        console.log(`Chunk ${chunkCount} received (${chunkStr.length} bytes):`, chunkStr.substring(0, 200));
-        
         const lines = chunkStr.split('\n').filter(line => line.trim());
-        console.log(`Processing ${lines.length} lines from chunk ${chunkCount}`);
-        
+
         for (const line of lines) {
           try {
             const data = JSON.parse(line);
-            console.log(`Parsed JSON from line:`, data);
             res.write(`data: ${JSON.stringify(data)}\n\n`);
-            console.log(`Sent data to client:`, JSON.stringify(data));
           } catch (e) {
-            console.log(`Skipped invalid JSON line:`, line);
+            // Skip invalid JSON lines (do not log — may contain generated text).
           }
         }
       });
 
       response.data.on('end', () => {
-        console.log("Ollama stream ended, sending [DONE]");
         res.write('data: [DONE]\n\n');
         res.end();
       });
 
       response.data.on('error', (error: any) => {
-        console.error('Ollama stream error:', error);
+        console.error('Ollama stream error:', safeErrorMeta(error));
         res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
         res.end();
       });
 
     } catch (error) {
-      console.error("Error in streaming generate:", error);
+      console.error("Error in streaming generate:", safeErrorMeta(error));
       if (axios.isAxiosError(error)) {
         console.error("Axios error details:", {
           status: error.response?.status,
           statusText: error.response?.statusText,
-          data: error.response?.data,
           message: error.message,
           code: error.code,
           url: error.config?.url,
@@ -413,8 +441,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/ollama/generate-stream", async (req, res) => {
     try {
       const { model, prompt, system, temperature, top_p } = req.body;
-      
-      console.log("Starting POST streaming request to Ollama for large input");
+
+      // Metadata-only logging: never log the prompt or generated text.
+      console.log(
+        `[ollama] generate-stream(POST) model=${model} prompt_len=${String(prompt ?? "").length}`
+      );
       
       const response = await axios.post(`${OLLAMA_API_URL}/api/generate`, {
         model,
@@ -464,13 +495,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       response.data.on('error', (error: any) => {
-        console.error('Stream error:', error);
+        console.error('Stream error:', safeErrorMeta(error));
         res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
         res.end();
       });
 
     } catch (error) {
-      console.error("Error in POST streaming generate:", error);
+      console.error("Error in POST streaming generate:", safeErrorMeta(error));
       res.status(500).json({
         status: "error",
         message: error instanceof Error ? error.message : "Failed to stream response"
@@ -542,8 +573,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const ocrPrompt =
         (req.body.prompt && req.body.prompt.toString().trim()) || DEFAULT_OCR_PROMPT;
 
+      // Metadata-only log: never log the filename (can contain a patient name).
       console.log(
-        `=== OCR REQUEST === file="${req.file.originalname}" (${req.file.size} bytes), model="${model}"`
+        `[ocr] request size=${req.file.size} bytes model="${model}"`
       );
 
       sendEvent({ status: "loading", message: "Loading document..." });
@@ -671,7 +703,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.write("data: [DONE]\n\n");
       res.end();
     } catch (error: any) {
-      console.error("Error in OCR endpoint:", error);
+      console.error("Error in OCR endpoint:", safeErrorMeta(error));
       sendEvent({ error: error?.message || "OCR processing failed." });
       res.write("data: [DONE]\n\n");
       res.end();
@@ -865,7 +897,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         finish();
       });
       ollamaRes.data.on("error", (err: any) => {
-        console.error("OCR upstream stream error:", err);
+        console.error("OCR upstream stream error:", safeErrorMeta(err));
         sendError(err?.message || "OCR stream failed.");
       });
 
@@ -875,7 +907,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!res.writableEnded) ollamaRes.data.destroy?.();
       });
     } catch (error: any) {
-      console.error("Error in single-page OCR endpoint:", error);
+      console.error("Error in single-page OCR endpoint:", safeErrorMeta(error));
       sendError(error?.message || "OCR processing failed.");
     }
   });
@@ -993,7 +1025,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         result = { warmed };
       } else if (step === "extract" && section) {
         const facts = await extractSectionFacts({
-          baseUrl: OLLAMA_API_URL, section, runId, signal: abort.signal,
+          baseUrl: OLLAMA_API_URL, section, runId,
+          styleInstructions, signal: abort.signal,
         });
         result = { facts };
       } else if (step === "synthesize" && sectionFacts) {
@@ -1170,7 +1203,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.end();
 
     } catch (error) {
-      console.error("Error in OpenAI streaming:", error);
+      console.error("Error in OpenAI streaming:", safeErrorMeta(error));
       res.status(500).json({
         status: "error",
         message: error instanceof Error ? error.message : "Failed to stream OpenAI response"
@@ -1323,8 +1356,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Test endpoint to fetch external prompt server documentation
+  // Test endpoint to fetch external prompt server documentation.
+  // Operator/debug probe — hidden (404) in production.
   app.get("/api/external-prompt-server/docs", async (req, res) => {
+    if (isProduction) {
+      return res.status(404).json({ status: "error", message: "Not found" });
+    }
     try {
       console.log("Fetching from https://promptserver.replit.app/api/help");
       const response = await axios.get("https://promptserver.replit.app/api/help", {
@@ -1349,7 +1386,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         data: response.data
       });
     } catch (error) {
-      console.error("Error fetching external prompt server docs:", error);
+      console.error("Error fetching external prompt server docs:", safeErrorMeta(error));
       if (axios.isAxiosError(error)) {
         console.log("Response status:", error.response?.status);
         console.log("Response data:", error.response?.data);
@@ -1368,8 +1405,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Test different endpoints on the external prompt server
+  // Test different endpoints on the external prompt server.
+  // Operator/debug probe — hidden (404) in production.
   app.get("/api/external-prompt-server/test", async (req, res) => {
+    if (isProduction) {
+      return res.status(404).json({ status: "error", message: "Not found" });
+    }
     const endpoints = [
       "/api/help",
       "/api/docs", 
@@ -1413,7 +1454,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const response = await axios.get("https://promptserver.replit.app/api/services");
       res.json(response.data);
     } catch (error) {
-      console.error("Error fetching services from external prompt server:", error);
+      console.error("Error fetching services from external prompt server:", safeErrorMeta(error));
       res.status(500).json({
         status: "error",
         message: "Failed to fetch services from external prompt server"
@@ -1433,7 +1474,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const response = await axios.get(url);
       res.json(response.data);
     } catch (error) {
-      console.error("Error fetching prompts from external prompt server:", error);
+      console.error("Error fetching prompts from external prompt server:", safeErrorMeta(error));
       res.status(500).json({
         status: "error",
         message: "Failed to fetch prompts from external prompt server"
@@ -1449,7 +1490,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const response = await axios.get(`https://promptserver.replit.app/api/services/${encodedService}/prompts`);
       res.json(response.data);
     } catch (error) {
-      console.error("Error fetching prompts by service from external prompt server:", error);
+      console.error("Error fetching prompts by service from external prompt server:", safeErrorMeta(error));
       res.status(500).json({
         status: "error",
         message: "Failed to fetch prompts by service from external prompt server"
@@ -1464,7 +1505,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const response = await axios.get(`https://promptserver.replit.app/api/prompts/${id}`);
       res.json(response.data);
     } catch (error) {
-      console.error("Error fetching prompt by ID from external prompt server:", error);
+      console.error("Error fetching prompt by ID from external prompt server:", safeErrorMeta(error));
       if (axios.isAxiosError(error) && error.response?.status === 404) {
         res.status(404).json({
           status: "error",
@@ -1487,7 +1528,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const response = await axios.get(`https://promptserver.replit.app/api/prompts/by-name/${encodedName}`);
       res.json(response.data);
     } catch (error) {
-      console.error("Error fetching prompt by name from external prompt server:", error);
+      console.error("Error fetching prompt by name from external prompt server:", safeErrorMeta(error));
       if (axios.isAxiosError(error) && error.response?.status === 404) {
         res.status(404).json({
           status: "error",
@@ -1517,7 +1558,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       res.json(response.data);
     } catch (error) {
-      console.error("Error preparing prompt from external prompt server:", error);
+      console.error("Error preparing prompt from external prompt server:", safeErrorMeta(error));
       if (axios.isAxiosError(error) && error.response?.status === 404) {
         res.status(404).json({
           status: "error",
@@ -1548,7 +1589,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       res.json(response.data);
     } catch (error) {
-      console.error("Error preparing prompt by name from external prompt server:", error);
+      console.error("Error preparing prompt by name from external prompt server:", safeErrorMeta(error));
       if (axios.isAxiosError(error) && error.response?.status === 404) {
         res.status(404).json({
           status: "error",
@@ -1569,7 +1610,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const response = await axios.get("https://promptserver.replit.app/api/stats");
       res.json(response.data);
     } catch (error) {
-      console.error("Error fetching stats from external prompt server:", error);
+      console.error("Error fetching stats from external prompt server:", safeErrorMeta(error));
       res.status(500).json({
         status: "error",
         message: "Failed to fetch stats from external prompt server"

@@ -511,7 +511,9 @@ export function OllamaChat() {
           const i = nextSection++;
           checkTimeBudget();
           const extractResult = await runPipelineStep(
-            { step: "extract", section: sections[i] },
+            // Pass the user's system prompt so extraction keeps whatever detail
+            // the requested output format will need (lossless inventory).
+            { step: "extract", section: sections[i], systemPrompt },
             controller.signal
           );
           sectionFacts[i] = {

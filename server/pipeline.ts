@@ -628,19 +628,36 @@ export function chunkText(
 
 // ---- Prompts -----------------------------------------------------------------
 
-const EXTRACT_PROMPT = `Extract structured facts from this clinical source section.
-Rules:
-- Extract facts only.
-- Do not write prose.
-- Do not infer.
-- Do not resolve ambiguity.
-- Preserve dates and times when present.
-- Preserve uncertainty.
-- Preserve important negative findings.
-- Include a SHORT source quote for traceability: at most 10 words, never full sentences or paragraphs.
-- Keep each fact concise — do not copy the source text verbatim.
-- Return JSON only.
+// Extraction is a LOSSLESS clinical detail inventory, not a summary. The old
+// prompt told the model to "keep each fact concise", which made it drop detail,
+// so the pipeline read as lossy compression next to the single-call path. This
+// version insists that every discrete detail is preserved. When the user gave
+// their own output-style instructions, they are included so extraction keeps
+// whatever the final format will need.
+function buildExtractPrompt(styleInstructions?: string): string {
+  const header = `Extract a lossless clinical detail inventory from this source section.
+This is an inventory, not a summary — preserve ALL clinically relevant details.
 
+Rules:
+- Do not summarize across dates, problems, medications, labs, imaging, consults, or events.
+- Do not collapse trends into a single statement when individual values or dates are present — record each value or date as its own fact.
+- Do not omit details because they seem repetitive or minor.
+- Preserve dates, times, lab values with units, medication names/doses/routes/frequencies, imaging findings, procedures, microbiology results, consultant opinions, uncertainty, conflicts, and important negatives.
+- Use one discrete fact per item. Keep each fact clear but complete — never shorten at the cost of losing detail.
+- Do not infer. Do not resolve ambiguity. Do not add anything not stated in the source.
+- Include a SHORT source_quote (a few words, for traceability only — never full sentences or paragraphs).
+- Return JSON only. Do not write prose.
+`;
+
+  const styleBlock = styleInstructions?.trim()
+    ? `
+The final note will be written using these user instructions:
+${styleInstructions.trim()}
+Extract all facts needed to satisfy this structure and style. Do not omit details that may be required by the requested format.
+`
+    : "";
+
+  const jsonSpec = `
 Expected JSON:
 {
   "section_id": "section_001",
@@ -658,20 +675,26 @@ Expected JSON:
 Section:
 `;
 
+  return header + styleBlock + jsonSpec;
+}
+
 // The user's own system prompt (their output-style instructions) takes
 // precedence over the default section layout when provided.
 function buildSynthesizePrompt(styleInstructions?: string): string {
   const header = `Write the final formatted clinical note from the extracted clinical facts below.
 
-Before writing, silently merge and deduplicate the facts and organize the hospital course chronologically where timing is available (problem-based where chronology is unclear). Output only the final note — no working, no JSON.
+Organize the hospital course chronologically where timing is available (problem-based where chronology is unclear). Output only the final note — no working, no JSON, no commentary.
 
 Rules:
+- Be comprehensive, not brief. Use ALL clinically relevant facts provided.
+- Do not omit details solely to improve readability or shorten the note.
+- Do not collapse multiple dated events, lab values, imaging findings, medication changes, or consultant recommendations into one vague summary — keep them distinct.
+- Merge only true duplicates (the same fact stated more than once).
 - Use only the provided facts. Do not add unsupported claims.
 - Do not invent dates, diagnoses, causality, or outcomes.
 - Preserve uncertainty and conflicts where present.
-- Use concise clinical prose.
+- The source_quote field is provided only for traceability/context. Do not include quotes in the final note unless the user's instructions explicitly ask for quoted material.
 - Do not mention the extraction process.
-- Do not include source quotes in the final note.
 `;
 
   const format = styleInstructions?.trim()
@@ -781,16 +804,17 @@ export async function extractSectionFacts(args: {
   baseUrl: string;
   section: PipelineSection;
   runId: string;
+  styleInstructions?: string;
   signal?: AbortSignal;
 }): Promise<any[]> {
-  const { baseUrl, section, runId, signal } = args;
+  const { baseUrl, section, runId, styleInstructions, signal } = args;
   const selection = await selectModels(baseUrl);
   const factsJson = await jsonCall(
     runId,
     `extract_${section.section_id}`,
     baseUrl,
     selection.smallModel,
-    EXTRACT_PROMPT +
+    buildExtractPrompt(styleInstructions) +
       JSON.stringify({
         section_id: section.section_id,
         title: section.title,
@@ -844,10 +868,12 @@ export async function warmLargeModel(args: {
   }
 }
 
-// Strip audit-only / empty fields from facts before sending them to the
-// synthesize model. `source_quote` is only needed by the audit step for
-// traceability; the final note must never contain quotes, so dropping it here
-// is lossless for synthesis and meaningfully shrinks the prompt.
+// Trim facts to the fields synthesis needs before sending them to the model.
+// We deliberately keep category, date_or_time, fact, certainty, and a SHORT
+// source_quote — richer facts produce a more faithful note. The quote is
+// bounded (extraction is told to keep it to a few words, and we hard-cap it
+// here) so this stays cheap: it does not meaningfully widen the model's silent
+// prompt-evaluation window that can trip the ~100s proxy 524 on long notes.
 function slimFactsForSynthesis(sectionFacts: SectionFacts[]): any[] {
   return (sectionFacts || [])
     .map((sf: any) => ({
@@ -858,8 +884,10 @@ function slimFactsForSynthesis(sectionFacts: SectionFacts[]): any[] {
           if (f?.category) slim.category = f.category;
           if (f?.date_or_time) slim.date_or_time = f.date_or_time;
           if (f?.fact) slim.fact = f.fact;
-          // Keep certainty only when it adds information (not the default).
-          if (f?.certainty && f.certainty !== "explicit") slim.certainty = f.certainty;
+          if (f?.certainty) slim.certainty = f.certainty;
+          // Keep a short traceability quote, defensively capped so a model that
+          // ignores the "a few words" instruction can't balloon the prompt.
+          if (f?.source_quote) slim.source_quote = String(f.source_quote).slice(0, 160);
           return slim;
         })
         // Drop malformed/empty facts so they don't add noise to the prompt.
@@ -881,11 +909,10 @@ export async function synthesizeNote(args: {
 }): Promise<string> {
   const { baseUrl, sectionFacts, runId, styleInstructions, signal, onToken, onAttemptStart } = args;
   const selection = await selectModels(baseUrl);
-  // Slim the facts for synthesis: drop the audit-only `source_quote` field
-  // (synthesize is told never to include quotes in the note) and empty keys.
-  // This can cut the synthesize prompt by ~30-40%, which directly shortens the
-  // model's silent prompt-evaluation window — the thing that trips the ~100s
-  // proxy 524 on long notes. The full facts (with quotes) still go to audit.
+  // Trim the facts to the fields synthesis needs (category, date_or_time, fact,
+  // certainty, and a short traceability quote) and drop empty keys. Synthesize
+  // is told the quote is context-only and must not appear in the note. The full
+  // facts still go to audit.
   const slimFacts = slimFactsForSynthesis(sectionFacts);
   const note = stripThink(
     await callWithRetry(

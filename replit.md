@@ -33,6 +33,7 @@ Turns long clinical text into a formatted note without hitting proxy timeouts. K
 - **Routing**: used when the "Use long-note pipeline" toggle is on OR input length ≥ threshold (`LONG_NOTE_CHARACTER_THRESHOLD`, default 12,000). Otherwise the normal one-shot path runs. Ollama only; OCR unaffected.
 - **Steps**: `split` (instant deterministic char-chunking, no model call) → per-section `extract` (small model, up to 3 concurrent requests) → `synthesize` (large model writes the final note in one call) → `audit` + one repair pass (runs in the **background** after the note is shown; non-fatal — a failed audit still delivers the note).
 - **Output style**: the user's "Instructions" box overrides the default six-section clinical layout for the synthesize step.
+- **Extraction/synthesis quality**: `extract` builds a *lossless clinical inventory* (every finding, value, date and detail — no summarizing) and is aware of the requested output format (the user's system prompt is threaded into extraction) so it keeps whatever that format will need; `synthesize` is instructed to be comprehensive and to merge only true duplicates. No extra steps or model calls were added to achieve this.
 - **Model selection**: `server/pipeline.ts` discovers models via `GET {ollama}/api/tags` (cached 5 min), excludes embedding/rerank/OCR models, picks a large model (synthesize/audit) and a small model (extract). Override with `OLLAMA_SMALL_MODEL` / `OLLAMA_LARGE_MODEL` (currently pinned to `gemma4:e4b` / `gemma4:12B`).
 - **Progress UI**: a looping loader cycles five fixed phrases; no step counts/progress bar/timer (per user preference). Detailed timings go to the browser console and server logs.
 - **Overall cap**: `PIPELINE_MAX_RUN_MINUTES` (default 45), enforced client-side between steps.
@@ -62,7 +63,12 @@ The Ollama server sits behind a Cloudflare-style proxy that returns **HTTP 524 w
 - **Build**: `npm run build` (Vite client build + esbuild server bundle).
 - **Start**: `npm run start` (production server).
 - **DB**: `npm run db:push` applies schema changes (never hand-write SQL migrations; use `--force` if a data-loss warning appears).
-- **Key env vars**: `DATABASE_URL` (required), `OPENAI_API_KEY`, `OLLAMA_API_URL` (Ollama server; defaults to `http://localhost:11434`, also persisted in the DB), plus the optional pipeline tuning vars above.
+- **Key env vars**: `DATABASE_URL` (required), `OPENAI_API_KEY`, `OLLAMA_API_URL` (Ollama server; defaults to `http://localhost:11434`, also persisted in the DB), optional `OLLAMA_ALLOWED_HOSTS` (comma-separated host allowlist for the in-app Ollama URL setter, dev only), plus the optional pipeline tuning vars above.
+
+### Privacy & Security
+- **Metadata-only logging**: all API request logging (`server/logging.ts`) records only method/path/status/duration — never request or response bodies. Prompt, generated-text, and OCR-filename logging were removed. Every error is logged through `safeErrorMeta()`, which extracts only name/message/code/HTTP-status; a raw axios error is never logged because its `config.data` holds the request body (prompt / clinical text / OCR payload) and would leak PHI.
+- **Production lockdown**: `POST /api/ollama/config` is disabled in production (403), and in dev it validates that the URL is a real http(s) URL and (if `OLLAMA_ALLOWED_HOSTS` is set) that its host is on the allowlist. The external-prompt-server debug endpoints (`/api/external-prompt-server/docs`, `/test`) return 404 in production.
+- **Regression guard**: `scripts/privacy-log-check.ts` (run with `npx tsx scripts/privacy-log-check.ts`) behaviorally verifies the logging middleware drops bodies and source-scans the server for reintroduced body/prompt/raw-error logging patterns; it exits non-zero on any violation.
 - Fixes deployed here only take effect after re-publishing.
 
 ## Changelog
@@ -76,6 +82,8 @@ The Ollama server sits behind a Cloudflare-style proxy that returns **HTTP 524 w
 - Jul 4, 2026: Found and fixed the real cause of synthesize 524s — disabled model "thinking" (`think: false`), so synthesize first-tokens in ~1s and completes in ~6s.
 - Jul 4, 2026: Removed the deprecated Azure providers (Azure OpenAI + legacy Azure VM chat) and the `AZURE_LLM_API_URL` env var — the feature was unused.
 - Jul 4, 2026: Ollama server address now displays the server's actual configured URL. Added `GET /api/ollama/config` (returns the URL loaded from the DB settings table); the client reads it so a browser with no saved override shows the real address instead of the `localhost` default. (The app was already connecting via the DB-stored URL — only the display was wrong.)
+- Jul 4, 2026: Long-note pipeline quality pass with NO new steps or model calls — `extract` now builds a lossless, format-aware clinical inventory (system prompt threaded into extraction), `synthesize` is told to be comprehensive and merge only true duplicates, and `slimFactsForSynthesis` keeps more fields (category/date/fact/certainty + a length-capped source quote for context).
+- Jul 4, 2026: Privacy/security hardening — app logging is now metadata-only (`server/logging.ts`), all error logs go through `safeErrorMeta()` (so a raw axios error's `config.data` request body can't leak PHI), `POST /api/ollama/config` is disabled in production + http(s)/allowlist validated, external-prompt-server debug endpoints 404 in production, and `scripts/privacy-log-check.ts` guards against regressions.
 ```
 
 ## User Preferences

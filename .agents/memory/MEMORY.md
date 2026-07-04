@@ -1,6 +1,0 @@
-- [Deployment request-size limit](deployment-request-size-limit.md) — autoscale proxy 413s big uploads before the app sees them; split client-side.
-- [Ollama thinking-phase silent 524](ollama-thinking-524.md) — thinking models can go silent 125s+ before first token → proxy 524; send `think:false` on batch calls.
-- [Ollama streaming pitfalls](ollama-streaming-pitfalls.md) — axios signal+stream stalls; zombie generations; cold model = zero bytes until load+eval (pre-warm); 524 error bodies can hang open — timeout reads.
-- [Deployment request-duration limit](deployment-request-duration-limit.md) — edge proxy kills ANY request at ~300s even with heartbeats; split long work into per-step requests.
-- [Workflow auto-restart kills in-flight tests](workflow-restart-kills-tests.md) — edits restart the dev server; finish edits before running long streaming tests.
-- [OCR model repetition loops](ocr-model-repetition.md) — vision OCR models loop/repeat on dense pages; cap with num_predict + repeat_penalty + a server-side repetition guard.
