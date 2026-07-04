@@ -111,6 +111,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Return the currently configured Ollama API URL so the client can display
+  // the real address (loaded from the DB settings table at startup) instead of
+  // a local default when this browser has no saved override.
+  app.get("/api/ollama/config", (req, res) => {
+    res.json({ serverUrl: OLLAMA_API_URL });
+  });
+
   // Configure Ollama API URL
   app.post("/api/ollama/config", async (req, res) => {
     try {

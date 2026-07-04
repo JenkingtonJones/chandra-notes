@@ -39,6 +39,13 @@ export function useOllama() {
     retry: 2
   });
 
+  // Fetch the server's currently configured Ollama URL so we can display the
+  // real address even when this browser has no saved override in localStorage.
+  const { data: configData } = useQuery({
+    queryKey: ["/api/ollama/config"],
+    staleTime: 1000 * 60 * 5,
+  });
+
   // Determine connection status
   const isConnected = !isPingError && !!pingData;
   const connectionError = isPingError ? (pingError as Error).message : undefined;
@@ -59,6 +66,15 @@ export function useOllama() {
       .then(() => console.log("Synced Ollama URL to backend:", stored))
       .catch((error) => console.error("Failed to sync Ollama URL to backend:", error));
   }, [serverUrl]);
+
+  // Show the backend's configured URL when this browser has no explicit local
+  // override, so the displayed address matches the server the app is actually
+  // using (its URL lives in the DB) instead of the local default.
+  useEffect(() => {
+    if (localStorage.getItem("ollamaServerUrl")) return;
+    const backendUrl = (configData as any)?.serverUrl;
+    if (backendUrl) setServerUrl(backendUrl);
+  }, [configData]);
 
   // Set first model as default if none selected and models are available
   useEffect(() => {

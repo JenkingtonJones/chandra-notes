@@ -127,7 +127,7 @@ export function ServerConfig({
               <Button 
                 type="button" 
                 variant="outline" 
-                onClick={() => setIsEditing(true)}
+                onClick={() => { setUrlInput(serverUrl); setIsEditing(true); }}
                 className="whitespace-nowrap"
               >
                 Edit

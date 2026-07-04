@@ -75,10 +75,12 @@ The Ollama server sits behind a Cloudflare-style proxy that returns **HTTP 524 w
 - Jul 3, 2026: Long-note pipeline redesigned around per-step requests (edge proxy kills any single request at ~300s); condensed steps; audit made non-fatal; client-side overall time cap.
 - Jul 4, 2026: Found and fixed the real cause of synthesize 524s — disabled model "thinking" (`think: false`), so synthesize first-tokens in ~1s and completes in ~6s.
 - Jul 4, 2026: Removed the deprecated Azure providers (Azure OpenAI + legacy Azure VM chat) and the `AZURE_LLM_API_URL` env var — the feature was unused.
+- Jul 4, 2026: Ollama server address now displays the server's actual configured URL. Added `GET /api/ollama/config` (returns the URL loaded from the DB settings table); the client reads it so a browser with no saved override shows the real address instead of the `localhost` default. (The app was already connecting via the DB-stored URL — only the display was wrong.)
 ```
 
 ## User Preferences
 
 ```
 Preferred communication style: Simple, everyday language.
+Keep the public GitHub repo (JenkingtonJones/chandra-notes) in sync with the app when code changes, so it matches the published web version. Reminder: publishing the app is a separate manual step the user performs.
 ```
